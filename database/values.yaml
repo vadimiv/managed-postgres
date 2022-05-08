@@ -1,0 +1,4 @@
+db:
+  enabled: false
+  cluster_id: ****************
+  fqdn: *****************

@@ -1,0 +1,28 @@
+### Creating secrets for access to cluster
+{{- if .Values.db.enabled }}
+kind: Secret
+metadata:
+  name: ya-cli
+  annotations:
+    "helm.sh/hook": pre-install,post-delete
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded,hook-failed"
+type: Opaque
+apiVersion: v1
+data:
+  key.json: *****
+
+### Secret for master user of cluster (PGPASSWORD)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+ name: postgres
+ annotations:
+    "helm.sh/hook": pre-install,post-delete
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded,hook-failed"
+type: Opaque
+data:
+  PGPASSWORD: ******
+{{- end }}

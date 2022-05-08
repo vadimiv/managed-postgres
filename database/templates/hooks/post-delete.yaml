@@ -1,0 +1,50 @@
+{{- if .Values.db.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+    name: "{{ .Release.Name }}-{{ .Release.Namespace }}-db-remove"
+    labels:
+        app: b2c
+    annotations:
+          "helm.sh/hook": post-delete
+          "helm.sh/hook-weight": "0"
+          "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded,hook-failed"
+spec:
+  template:
+    spec:
+      containers:
+       - name: delete-database
+         image: nexus-docker.b2c.yc.mvideo.ru/yandex-cli
+         imagePullPolicy: IfNotPresent
+         command: ['/mnt/delete_db.sh']
+         args: ["{{ .Release.Namespace }}", "{{ .Values.db.cluster_id }}", "{{ .Values.db.fqdn }}"]
+         env:
+          - name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: postgres
+                key: PGPASSWORD
+         volumeMounts:
+         - name: config
+           mountPath: "/opt"
+           readOnly: true
+         - name: hook-entrypoint
+           mountPath: /mnt/delete_db.sh
+           subPath: delete_db.sh
+         securityContext:
+           runAsUser: 0
+
+      restartPolicy: OnFailure
+      terminationGracePeriodSeconds: 5
+      volumes:
+      - name: config
+        secret:
+          secretName: ya-cli
+      - name: hook-entrypoint
+        configMap:
+          name: hook-entrypoint
+          defaultMode: 0777
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+{{- end }}

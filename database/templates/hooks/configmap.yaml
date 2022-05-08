@@ -1,0 +1,131 @@
+{{- if .Values.db.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hook-entrypoint
+  labels:
+     app: b2c
+  annotations:
+    "helm.sh/hook": pre-install,post-delete
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": "before-hook-creation,hook-failed,hook-succeeded"
+data:
+  # https://cloud.yandex.com/en-ru/docs/managed-postgresql/api-ref/Database/
+
+  delete_db.sh: |
+    #!/bin/bash
+    set -x
+    DATABASE_NAME=$1
+    CLUSTER_ID=$2
+    FQDN=$3
+
+    /root/yandex-cloud/bin/yc config profile create psql && /root/yandex-cloud/bin/yc config set service-account-key /opt/key.json
+    export YC_TOKEN=$(/root/yandex-cloud/bin/yc iam create-token)
+
+    echo "Lets try to delete database $DATABASE_NAME"
+    RESULT=`curl -o /dev/null -s -w "%{http_code}\n" -X DELETE -H "Authorization: Bearer ${YC_TOKEN}" \
+    https://mdb.api.cloud.yandex.net/managed-postgresql/v1/clusters/$CLUSTER_ID/databases/${DATABASE_NAME} \
+    --header "Content-Type: application/json"`
+
+    case $RESULT in
+        200)
+          echo "DataBase removal initiated"
+        ;;
+        404)
+          echo "Database does not exists or already removed"
+        ;;
+        *)
+          echo "Could not delete database, Request failed, check \"Operations\" tab in Yandex cloud web interface"
+          exit 1
+    esac
+
+  create_db.sh: |
+    #!/bin/bash
+    #
+    set -x
+
+    SCHEMAS=(schema_name_1 schema_name_2 schema_name_3 schema_name_4)
+    
+    DATABASE_NAME=$1
+
+    CLUSTER_ID=$2
+
+    FQDN=$3
+
+    /root/yandex-cloud/bin/yc config profile create psql && /root/yandex-cloud/bin/yc config set service-account-key /opt/key.json
+
+    export YC_TOKEN=$(/root/yandex-cloud/bin/yc iam create-token)
+
+    createDB(){
+
+    echo "Creating database $DATABASE_NAME"
+    RESULT=`curl -o /dev/null -s -w "%{http_code}\n" -X POST -H "Authorization: Bearer ${YC_TOKEN}" \
+    ### Creating necessary extensions
+    https://mdb.api.cloud.yandex.net/managed-postgresql/v1/clusters/$CLUSTER_ID/databases \
+    -d '{ "databaseSpec": {"name": "'$DATABASE_NAME'", "owner": "username", "lcCollate": "ru_RU.UTF-8", "lcCtype": "ru_RU.UTF-8", "extensions": [{"name": "pg_stat_statements"},{"name": "btree_gin"},{"name": "pg_trgm"}] } }' \
+    --header "Content-Type: application/json"`
+
+    case $RESULT in
+        200)
+            echo "DataBase sucessfully created"
+        ;;
+        409)
+            echo "Database allready exists"
+            exit 0
+        ;;
+        404)
+            echo "Creating database finished with error"
+            exit 1
+        ;;
+        400)
+            echo "Creating database finished with error"
+            exit 1
+      esac
+
+    }
+
+    createDB $DATABASE_NAME
+
+    sleep 20
+
+    echo "Grant users to database"
+
+    for schema in ${SCHEMAS[@]}
+    do
+      RESULT=$(curl -o /dev/null -s -w "%{http_code}\n" -vX POST -H "Authorization: Bearer ${YC_TOKEN}" https://mdb.api.cloud.yandex.net/managed-postgresql/v1/clusters/$CLUSTER_ID/users/$schema/grantPermission -d '{"permission": { "databaseName":"'$DATABASE_NAME'"}}' --header "Content-Type: application/json")
+
+      case $RESULT in
+        200)
+            echo "Sucessfully operation"
+        ;;
+        409)
+            echo "Allready exists"
+        ;;
+        404)
+            echo "Database does not exists"
+            exit 1
+        ;;
+        400)
+           count=0
+           ### Possible to catch concurrent operation
+           until [[ $count -gt 3 || $RESULT == "200" ]]
+           do
+              RESULT=$(curl -o /dev/null -s -w "%{http_code}\n" -vX POST -H "Authorization: Bearer ${YC_TOKEN}" https://mdb.api.cloud.yandex.net/managed-postgresql/v1/clusters/$CLUSTER_ID/users/$schema/grantPermission -d '{"permission": { "databaseName":"'$DATABASE_NAME'"}}' --header "Content-Type: application/json")
+              (( count++ ))
+              sleep 20
+           done
+      esac
+        sleep 20
+    done
+
+    echo "Creating schemas"
+
+    for schema in ${SCHEMAS[@]}
+    do
+      psql -h $FQDN -p 6432 -U username -d $DATABASE_NAME -c "create schema if not exists $schema AUTHORIZATION $schema"
+      psql -h $FQDN -p 6432 -U username -d $DATABASE_NAME -c "grant all on SCHEMA $schema to $schema"
+
+    done
+    exit 0
+
+{{- end }}
